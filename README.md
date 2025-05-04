@@ -1,1 +1,2 @@
 # Brain-Tumor-Detection-DL
+This project is a deep learning-based binary image classification model that detects the presence of brain tumors in MRI scans. Leveraging convolutional neural networks (CNNs) and data augmentation techniques, the model distinguishes between tumor (e.g., glioma) and normal brain images. The dataset is manually labeled and preprocessed for optimal performance. This tool is designed to support medical diagnostics by offering fast, automated, and accurate tumor detection.
