@@ -13,27 +13,40 @@ This project is a deep learning-based binary image classification model that det
 - **Model:** ResNet50 pretrained on ImageNet. Only `layer4` and a new `Dropout + Linear` head are trained (transfer learning).
 - **Augmentation:** random horizontal flip, rotation (±10°), brightness/contrast jitter.
 - **Training:** Adam (lr 1e-3, weight decay 1e-4), ReduceLROnPlateau, 15 epochs, batch size 32.
-- **Evaluation:** stratified **70 / 15 / 15** train / validation / test split. The validation set picks the best epoch. The test set is used **once**, at the end, so its score isn't tuned to the data.
-- **Confidence intervals:** test metrics are reported with bootstrap 95% CIs (1,000 resamples). With ~116 test images, a single accuracy number can easily move a few percent, and the interval shows how far.
+- **Evaluation:** stratified **70 / 15 / 15** train / validation / test split (538 / 116 / 115 images). The epoch with the lowest validation loss becomes the final model. The test set is only used at the end.
+- **Duplicate-aware split:** the dataset contains the same scan saved under different filenames (769 images = 681 unique scans). Near-identical images are grouped with a perceptual hash plus a pixel-difference check, and each group is kept inside one split, so no scan appears in both training and test.
+- **Confidence intervals:** test metrics are reported with bootstrap 95% CIs (1,000 resamples). With 115 test images, a single accuracy number can easily move a few percent, and the interval shows how far.
 - **Explainability:** Grad-CAM on the last convolutional block (`layer4`), in `gradcam.py`.
 
 ## Results (held-out test set)
 
 | Metric | Score | 95% CI |
 |---|---|---|
-| Accuracy | _TBD_ | _TBD_ |
-| Recall (macro) | _TBD_ | _TBD_ |
-| Precision (macro) | _TBD_ | _TBD_ |
-| F1 (macro) | _TBD_ | _TBD_ |
-| ROC-AUC | _TBD_ | _TBD_ |
+| Accuracy | 95.7% | 91.3 – 99.1% |
+| Recall (macro) | 95.5% | 91.3 – 99.0% |
+| Precision (macro) | 96.1% | 92.4 – 99.1% |
+| F1 (macro) | 95.6% | 91.3 – 99.1% |
+| ROC-AUC | 0.989 | 0.971 – 1.000 |
+
+Per class: **glioma recall 91.1%** (5 of 56 tumors missed), normal recall 100% (no false alarms). For a screening tool the missed tumors are the more serious error, so improving tumor recall is the main area for future work.
 
 ![Confusion matrix](confusion_matrix.png)
 ![Training history](training_history.png)
 
 > The earlier write-up (`Brain Tumor Detection Using Deep Learning.pdf`) reports 98% accuracy and recall. That number was measured on the validation set that was also used to pick the best model, so it is optimistic. The table above comes from a separate test set and supersedes it.
 
+**How the evaluation was fixed (for transparency):**
+1. Added a held-out test set. The first run, which kept the original "best validation accuracy" rule, scored 94.0% on test. That rule kept epoch 1 because later epochs only tied its accuracy, even though their validation loss was less than half as high.
+2. Switched model selection to the lowest validation loss. The reason for this change was visible in the validation numbers alone.
+3. Found exact and near-duplicate scans crossing the train/test boundary, and made the split duplicate-aware. The table above is from this final run. No further changes were made after seeing it.
+
 ## About the Grad-CAM heatmap
-Grad-CAM highlights the regions that most influenced the model's decision: **where the model is looking**. It is not a tumor outline or a segmentation. On glioma scans it usually lands on the tumor, which suggests the model learned something meaningful. Getting real tumor boundaries would need a segmentation model trained on pixel-level masks.
+Grad-CAM highlights the regions that most influenced the model's decision: **where the model is looking**. It is not a tumor outline or a segmentation. Getting real tumor boundaries would need a segmentation model trained on pixel-level masks.
+
+![Grad-CAM examples](gradcam_examples.png)
+*Test-set scans (top row and middle-left: glioma; others: normal), each next to its heatmap.*
+
+What the heatmaps show, honestly: on most glioma scans the model focuses on or near the tumor. On some scans, though, it looks elsewhere. On two of the normal scans there is a hot spot in the corner outside the skull, which suggests the model also picks up on image artifacts and not only on anatomy. This is exactly what Grad-CAM is useful for: checking *why* a model is right, not just *whether* it is.
 
 ## Dataset
 [PMRAM: Bangladeshi Brain Cancer - MRI Dataset](https://data.mendeley.com/datasets/m7w55sw88b/1) (Mendeley Data, doi:10.17632/m7w55sw88b.1), licensed CC BY 4.0. This project uses only the **glioma** and **normal (no tumor)** classes: 769 images, listed with labels in `brain_tumor_labels.csv` (1 = glioma, 0 = normal).
@@ -72,7 +85,8 @@ hf upload <hf-username>/<space-name> . . --repo-type=space --include "app.py" "g
 
 ## Limitations
 - **Single dataset, single source.** Performance on scans from other hospitals or scanners is unknown.
-- **No patient IDs.** The dataset doesn't say which slices come from the same patient, so slices from one patient may appear in both train and test. That would make the test score optimistic.
+- **No patient IDs.** Exact and near-duplicate images are kept in one split, but different slices from the same patient (for example consecutive slices through the same tumor) can still land in both train and test. That may make the test score somewhat optimistic.
+- **Possible shortcut: scan type.** Most glioma images are T1 post-contrast scans, while most normal images are T2/FLAIR. The model may partly be recognising the scan type instead of the tumor. A fair test would need tumor and normal scans of the same sequence.
 - **Binary only.** Glioma vs normal; meningioma, pituitary tumors and tumor grade aren't handled.
 - **Grad-CAM is not segmentation.** See above.
 
@@ -82,6 +96,8 @@ main.py                   training + evaluation (split, bootstrap CIs, plots)
 gradcam.py                Grad-CAM heatmap + overlay
 app.py                    Gradio web demo
 tests/test_project.py     pytest tests
+gradcam_examples.png      Grad-CAM examples from the test set
+samples/                  demo sample scans (from the test split)
 brain_tumor_labels.csv    filename -> label (1 = glioma, 0 = normal)
 space_README.md           README (with config header) for the Hugging Face Space
 ```

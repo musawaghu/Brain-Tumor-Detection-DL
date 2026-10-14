@@ -33,6 +33,20 @@ def test_split_is_disjoint_complete_and_stratified():
         assert abs(split.label.mean() - overall) < 0.02
 
 
+def test_duplicate_groups_never_cross_splits():
+    df = pd.read_csv(os.path.join(ROOT, "brain_tumor_labels.csv"))
+    # Fake duplicate groups: pair up consecutive images of the same class
+    df = df.sort_values("label").reset_index(drop=True)
+    groups = np.arange(len(df)) // 2
+    train_df, val_df, test_df = split_data(df, groups)
+
+    split_of_group = {}
+    for name, split in (("train", train_df), ("val", val_df), ("test", test_df)):
+        for g in groups[split.index]:
+            assert split_of_group.setdefault(g, name) == name  # a group lives in one split only
+    assert len(train_df) + len(val_df) + len(test_df) == len(df)
+
+
 def test_split_is_reproducible():
     df = pd.read_csv(os.path.join(ROOT, "brain_tumor_labels.csv"))
     assert list(split_data(df)[2].filename) == list(split_data(df)[2].filename)

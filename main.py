@@ -102,12 +102,48 @@ val_transform = transforms.Compose([
 ])
 
 
+# The dataset contains duplicate scans saved under different filenames. If copies of the same scan
+# land in both train and test, the test score is inflated. Two images count as duplicates when:
+#   1. their perceptual hashes (16x16 thumbnail, each pixel above/below the mean -> 256 bits)
+#      differ in at most max_bit_diff bits (fast first filter), and
+#   2. their 64x64 grayscale thumbnails differ by at most max_pixel_diff on average (0-255 scale).
+# Step 2 is needed because the hash alone matches different scans with similar dark backgrounds.
+def duplicate_groups(df, img_dir, max_bit_diff=5, max_pixel_diff=4):
+    paths = {f: os.path.join(root, f) for root, _, files in os.walk(img_dir) for f in files}
+    hashes, thumbs = [], []
+    for name in df.iloc[:, 0]:
+        gray = Image.open(paths[name]).convert('L')
+        small = np.asarray(gray.resize((16, 16), Image.BILINEAR), dtype=float)
+        hashes.append((small > small.mean()).flatten())
+        thumbs.append(np.asarray(gray.resize((64, 64), Image.BILINEAR), dtype=float).flatten())
+    hashes, thumbs = np.array(hashes), np.array(thumbs)
+
+    # Union-find: duplicates (and duplicates of duplicates) end up in the same group
+    parent = list(range(len(hashes)))
+
+    def find(i):
+        while parent[i] != i:
+            i = parent[i]
+        return i
+
+    for i in range(len(hashes)):
+        close = np.nonzero((hashes[i + 1:] != hashes[i]).sum(axis=1) <= max_bit_diff)[0] + i + 1
+        for j in close:
+            if np.abs(thumbs[i] - thumbs[j]).mean() <= max_pixel_diff:
+                parent[find(j)] = find(i)
+    return np.array([find(i) for i in range(len(hashes))])
+
+
 # Stratified 70/15/15 split. The test set is never seen during training or model selection,
 # so its score is an honest estimate of performance on unseen images.
-def split_data(df, seed=42):
-    train_df, temp_df = train_test_split(df, test_size=0.3, random_state=seed, stratify=df.iloc[:, 1])
-    val_df, test_df = train_test_split(temp_df, test_size=0.5, random_state=seed, stratify=temp_df.iloc[:, 1])
-    return train_df, val_df, test_df
+# If duplicate groups are given, whole groups are split so no scan appears in two splits.
+def split_data(df, groups=None, seed=42):
+    if groups is None:
+        groups = np.arange(len(df))  # every image is its own group
+    group_df = pd.DataFrame({'group': groups, 'label': df.iloc[:, 1].values}).drop_duplicates('group')
+    train_g, temp_g = train_test_split(group_df, test_size=0.3, random_state=seed, stratify=group_df.label)
+    val_g, test_g = train_test_split(temp_g, test_size=0.5, random_state=seed, stratify=temp_g.label)
+    return tuple(df[np.isin(groups, g.group)] for g in (train_g, val_g, test_g))
 
 
 # Function to prepare data
@@ -122,8 +158,10 @@ def prepare_data():
     print(f"Columns: {df.columns.tolist()}")
     print(f"Sample data:\n{df.head()}")
 
-    # Split into train / validation / test sets (70 / 15 / 15)
-    train_df, val_df, test_df = split_data(df)
+    # Split into train / validation / test sets (70 / 15 / 15), keeping duplicate scans together
+    groups = duplicate_groups(df, IMAGE_DIR)
+    print(f"Duplicate check: {len(df)} images form {len(np.unique(groups))} unique scans")
+    train_df, val_df, test_df = split_data(df, groups)
 
     # Save the splits for reference
     train_df.to_csv('train_split.csv', index=False)
@@ -213,6 +251,7 @@ def get_model(num_classes):
 # Training function
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs):
     best_val_acc = 0.0
+    best_val_loss = float('inf')  # Used to pick the final model
     best_val_recall = 0.0  # Added to track best recall
     history = {
         'train_loss': [], 'train_acc': [],
@@ -302,6 +341,19 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         history['val_recall'].append(epoch_recall)
 
         print(f"Val Loss: {epoch_loss:.4f}, Val Acc: {epoch_acc:.4f}, Val Recall: {epoch_recall:.4f}")
+
+        # Save best model based on validation loss. This picks the final model: with ~115 validation
+        # images, accuracy moves in ~1% steps and often ties, while loss changes smoothly.
+        if epoch_loss < best_val_loss:
+            best_val_loss = epoch_loss
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'loss': best_val_loss,
+                'accuracy': epoch_acc.item(),
+                'recall': float(epoch_recall),
+            }, 'best_loss_model.pth')
+            print(f"Saved new best loss model: {best_val_loss:.4f}")
 
         # Save best model based on accuracy
         if epoch_acc > best_val_acc:
@@ -574,11 +626,11 @@ def main():
     # Plot training history
     plot_training_history(history)
 
-    # Use the epoch that scored best on validation (not simply the last epoch)
-    # weights_only=False: our own file, and it also stores optimizer state and metric values
-    best_checkpoint = torch.load('best_acc_model.pth', map_location=DEVICE, weights_only=False)
+    # Use the epoch with the lowest validation loss (not simply the last epoch)
+    best_checkpoint = torch.load('best_loss_model.pth', map_location=DEVICE, weights_only=True)
     model.load_state_dict(best_checkpoint['model_state_dict'])
-    print(f"Loaded best validation model from epoch {best_checkpoint['epoch'] + 1}")
+    print(f"Loaded lowest validation loss model from epoch {best_checkpoint['epoch'] + 1} "
+          f"(val loss {best_checkpoint['loss']:.4f})")
 
     # Evaluate exactly once on the held-out test set
     print("Evaluating best model on held-out test set...")
@@ -600,6 +652,7 @@ def main():
 
     print("Training complete!")
     print("Models have been saved as:")
+    print("- 'best_loss_model.pth' (lowest validation loss)")
     print("- 'best_acc_model.pth' (best accuracy)")
     print("- 'best_recall_model.pth' (best recall)")
     print("- 'final_brain_mri_model.pth' (best validation model + test metrics, used by app.py)")
