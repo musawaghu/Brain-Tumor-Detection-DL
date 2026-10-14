@@ -11,7 +11,7 @@ This project is a deep learning-based binary image classification model that det
 ## How it works
 - **Model:** ResNet50 pretrained on ImageNet. Only `layer4` and a new `Dropout + Linear` head are trained (transfer learning).
 - **Augmentation:** random horizontal flip, rotation (±10°), brightness/contrast jitter.
-- **Training:** Adam (lr 1e-3, weight decay 1e-4), ReduceLROnPlateau, 15 epochs, batch size 32.
+- **Training:** Adam (lr 1e-3, weight decay 1e-4), ReduceLROnPlateau, batch size 32, up to 15 epochs with early stopping (stops after 5 epochs without a lower validation loss).
 - **Evaluation:** stratified **70 / 15 / 15** train / validation / test split (538 / 116 / 115 images). The epoch with the lowest validation loss becomes the final model. The test set is only used at the end.
 - **Duplicate-aware split:** the dataset contains the same scan saved under different filenames (769 images = 681 unique scans). Near-identical images are grouped with a perceptual hash plus a pixel-difference check, and each group is kept inside one split, so no scan appears in both training and test.
 - **Confidence intervals:** test metrics are reported with bootstrap 95% CIs (1,000 resamples). With 115 test images, a single accuracy number can easily move a few percent, and the interval shows how far.
@@ -32,7 +32,7 @@ Per class: **glioma recall 91.1%** (5 of 56 tumors missed), normal recall 100% (
 ![Confusion matrix](confusion_matrix.png)
 ![Training history](training_history.png)
 
-> The earlier write-up (`Brain Tumor Detection Using Deep Learning.pdf`) reports 98% accuracy and recall. That number was measured on the validation set that was also used to pick the best model, so it is optimistic. The table above comes from a separate test set and supersedes it.
+> An earlier version of this project reported 98% accuracy and recall. That number was measured on the validation set that was also used to pick the best model, so it was optimistic. The table above comes from a separate test set and supersedes it. The full write-up, [`Brain Tumor Detection Using Deep Learning.pdf`](Brain%20Tumor%20Detection%20Using%20Deep%20Learning.pdf), has been revised with these results.
 
 **How the evaluation was fixed (for transparency):**
 1. Added a held-out test set. The first run, which kept the original "best validation accuracy" rule, scored 94.0% on test. That rule kept epoch 1 because later epochs only tied its accuracy, even though their validation loss was less than half as high.
@@ -75,7 +75,7 @@ Download the dataset first (see [Dataset](#dataset)), then:
 python main.py   # trains, prints test metrics + 95% CIs, saves final_brain_mri_model.pth and plots
 pytest           # runs the tests (the app test runs once final_brain_mri_model.pth exists)
 ```
-Training takes about 5 minutes on a mid-range GPU (RTX 2060 Super). For a GPU build of PyTorch, see pytorch.org/get-started.
+Training takes a few minutes on a mid-range GPU (RTX 2060 Super); early stopping usually ends it after about 7 epochs. For a GPU build of PyTorch, see pytorch.org/get-started.
 
 ### Sample scans for the demo
 The demo's sample images must come from the **test** split, so visitors only see scans the model never trained on. After training:
