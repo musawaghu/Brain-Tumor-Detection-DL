@@ -1,0 +1,11 @@
+torch>=2.14
+torchvision>=0.29
+gradio>=6.30
+numpy>=2.5
+pandas>=3.0
+scikit-learn>=1.9
+matplotlib>=3.11
+seaborn>=0.13
+pillow>=12.3
+tqdm>=4.70
+pytest>=8

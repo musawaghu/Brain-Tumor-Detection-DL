@@ -1,0 +1,17 @@
+# Dataset (download PMRAM yourself, see README)
+data/
+
+# Model weights (~95 MB); hosted on the Hugging Face Space instead
+*.pth
+
+# Generated split files
+train_split.csv
+val_split.csv
+test_split.csv
+
+# Environment / IDE
+.venv/
+.idea/
+__pycache__/
+.pytest_cache/
+.gradio/
