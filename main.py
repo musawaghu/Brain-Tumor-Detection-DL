@@ -34,8 +34,9 @@ BATCH_SIZE = 32
 NUM_EPOCHS = 15
 LEARNING_RATE = 0.001
 IMAGE_SIZE = 224
-IMAGE_DIR = "C:\\Users\\Musa Waghu\\PycharmProjects\\BrainTumorDetection\\data"
-CSV_FILE = "C:\\Users\\Musa Waghu\\PycharmProjects\\BrainTumorDetection\\brain_tumor_labels.csv"
+# Relative paths so the project runs on any machine (put the PMRAM images in ./data/)
+IMAGE_DIR = "data"
+CSV_FILE = "brain_tumor_labels.csv"
 
 # Check if CUDA is available
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -101,6 +102,50 @@ val_transform = transforms.Compose([
 ])
 
 
+# The dataset contains duplicate scans saved under different filenames. If copies of the same scan
+# land in both train and test, the test score is inflated. Two images count as duplicates when:
+#   1. their perceptual hashes (16x16 thumbnail, each pixel above/below the mean -> 256 bits)
+#      differ in at most max_bit_diff bits (fast first filter), and
+#   2. their 64x64 grayscale thumbnails differ by at most max_pixel_diff on average (0-255 scale).
+# Step 2 is needed because the hash alone matches different scans with similar dark backgrounds.
+def duplicate_groups(df, img_dir, max_bit_diff=5, max_pixel_diff=4):
+    paths = {f: os.path.join(root, f) for root, _, files in os.walk(img_dir) for f in files}
+    hashes, thumbs = [], []
+    for name in df.iloc[:, 0]:
+        gray = Image.open(paths[name]).convert('L')
+        small = np.asarray(gray.resize((16, 16), Image.BILINEAR), dtype=float)
+        hashes.append((small > small.mean()).flatten())
+        thumbs.append(np.asarray(gray.resize((64, 64), Image.BILINEAR), dtype=float).flatten())
+    hashes, thumbs = np.array(hashes), np.array(thumbs)
+
+    # Union-find: duplicates (and duplicates of duplicates) end up in the same group
+    parent = list(range(len(hashes)))
+
+    def find(i):
+        while parent[i] != i:
+            i = parent[i]
+        return i
+
+    for i in range(len(hashes)):
+        close = np.nonzero((hashes[i + 1:] != hashes[i]).sum(axis=1) <= max_bit_diff)[0] + i + 1
+        for j in close:
+            if np.abs(thumbs[i] - thumbs[j]).mean() <= max_pixel_diff:
+                parent[find(j)] = find(i)
+    return np.array([find(i) for i in range(len(hashes))])
+
+
+# Stratified 70/15/15 split. The test set is never seen during training or model selection,
+# so its score is an honest estimate of performance on unseen images.
+# If duplicate groups are given, whole groups are split so no scan appears in two splits.
+def split_data(df, groups=None, seed=42):
+    if groups is None:
+        groups = np.arange(len(df))  # every image is its own group
+    group_df = pd.DataFrame({'group': groups, 'label': df.iloc[:, 1].values}).drop_duplicates('group')
+    train_g, temp_g = train_test_split(group_df, test_size=0.3, random_state=seed, stratify=group_df.label)
+    val_g, test_g = train_test_split(temp_g, test_size=0.5, random_state=seed, stratify=temp_g.label)
+    return tuple(df[np.isin(groups, g.group)] for g in (train_g, val_g, test_g))
+
+
 # Function to prepare data
 def prepare_data():
     # Check if CSV file exists
@@ -113,25 +158,32 @@ def prepare_data():
     print(f"Columns: {df.columns.tolist()}")
     print(f"Sample data:\n{df.head()}")
 
-    # Split into train and validation sets
-    train_df, val_df = train_test_split(df, test_size=0.2, random_state=42, stratify=df.iloc[:, 1])
+    # Split into train / validation / test sets (70 / 15 / 15), keeping duplicate scans together
+    groups = duplicate_groups(df, IMAGE_DIR)
+    print(f"Duplicate check: {len(df)} images form {len(np.unique(groups))} unique scans")
+    train_df, val_df, test_df = split_data(df, groups)
 
     # Save the splits for reference
     train_df.to_csv('train_split.csv', index=False)
     val_df.to_csv('val_split.csv', index=False)
+    test_df.to_csv('test_split.csv', index=False)
 
     print(f"Training set size: {len(train_df)}")
     print(f"Validation set size: {len(val_df)}")
+    print(f"Test set size: {len(test_df)}")
 
-    # Create temporary CSV files for the train and validation datasets
+    # Create temporary CSV files for the train, validation and test datasets
     train_csv = 'train_temp.csv'
     val_csv = 'val_temp.csv'
+    test_csv = 'test_temp.csv'
     train_df.to_csv(train_csv, index=False)
     val_df.to_csv(val_csv, index=False)
+    test_df.to_csv(test_csv, index=False)
 
     # Create the datasets
     train_dataset = BrainMRIDataset(img_dir=IMAGE_DIR, csv_file=train_csv, transform=train_transform)
     val_dataset = BrainMRIDataset(img_dir=IMAGE_DIR, csv_file=val_csv, transform=val_transform)
+    test_dataset = BrainMRIDataset(img_dir=IMAGE_DIR, csv_file=test_csv, transform=val_transform)
 
     # Create data loaders
     train_loader = DataLoader(
@@ -150,9 +202,18 @@ def prepare_data():
         pin_memory=True
     )
 
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=4,
+        pin_memory=True
+    )
+
     # Clean up temporary files
     os.remove(train_csv)
     os.remove(val_csv)
+    os.remove(test_csv)
 
     # Get numerical class labels
     unique_labels = sorted(df.iloc[:, 1].unique())
@@ -164,7 +225,7 @@ def prepare_data():
     print(f"Number of classes: {num_classes}")
     print(f"Unique labels: {unique_labels}")
 
-    return train_loader, val_loader, class_names, num_classes
+    return train_loader, val_loader, test_loader, class_names, num_classes
 
 
 # Get a pretrained ResNet model and modify for our task
@@ -190,6 +251,7 @@ def get_model(num_classes):
 # Training function
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs):
     best_val_acc = 0.0
+    best_val_loss = float('inf')  # Used to pick the final model
     best_val_recall = 0.0  # Added to track best recall
     history = {
         'train_loss': [], 'train_acc': [],
@@ -279,6 +341,19 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
         history['val_recall'].append(epoch_recall)
 
         print(f"Val Loss: {epoch_loss:.4f}, Val Acc: {epoch_acc:.4f}, Val Recall: {epoch_recall:.4f}")
+
+        # Save best model based on validation loss. This picks the final model: with ~115 validation
+        # images, accuracy moves in ~1% steps and often ties, while loss changes smoothly.
+        if epoch_loss < best_val_loss:
+            best_val_loss = epoch_loss
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'loss': best_val_loss,
+                'accuracy': epoch_acc.item(),
+                'recall': float(epoch_recall),
+            }, 'best_loss_model.pth')
+            print(f"Saved new best loss model: {best_val_loss:.4f}")
 
         # Save best model based on accuracy
         if epoch_acc > best_val_acc:
@@ -414,7 +489,30 @@ def predict_image(model, image_path, class_names, transform=val_transform):
     return pred_class, pred_prob
 
 
-# Function to evaluate model on the validation set
+# Bootstrap 95% confidence intervals: resample the evaluated images with replacement many times,
+# recompute each metric, and take the 2.5th and 97.5th percentiles. Shows how much the score
+# could move with a different sample of test images.
+def bootstrap_ci(y_true, y_pred, y_score, n_boot=1000, seed=42):
+    y_true, y_pred, y_score = np.array(y_true), np.array(y_pred), np.array(y_score)
+    rng = np.random.default_rng(seed)
+    metric_fns = {
+        'accuracy': lambda t, p, s: accuracy_score(t, p),
+        'precision': lambda t, p, s: precision_score(t, p, average='macro', zero_division=0),
+        'recall': lambda t, p, s: recall_score(t, p, average='macro', zero_division=0),
+        'f1': lambda t, p, s: f1_score(t, p, average='macro', zero_division=0),
+        'roc_auc': lambda t, p, s: roc_auc_score(t, s),
+    }
+    samples = {name: [] for name in metric_fns}
+    for _ in range(n_boot):
+        idx = rng.integers(0, len(y_true), len(y_true))
+        if len(np.unique(y_true[idx])) < 2:  # ROC-AUC needs both classes in the resample
+            continue
+        for name, fn in metric_fns.items():
+            samples[name].append(fn(y_true[idx], y_pred[idx], y_score[idx]))
+    return {name: (float(np.percentile(v, 2.5)), float(np.percentile(v, 97.5))) for name, v in samples.items()}
+
+
+# Function to evaluate model on a held-out set (validation or test)
 def evaluate_model(model, data_loader, criterion, class_names):
     model.eval()
     running_loss = 0.0
@@ -484,15 +582,21 @@ def evaluate_model(model, data_loader, criterion, class_names):
         except Exception as e:
             print(f"Couldn't calculate ROC-AUC: {e}")
 
+    # 95% confidence intervals (binary task: score = probability of the tumor class)
+    cis = bootstrap_ci(all_labels, all_preds, [prob[1] for prob in all_probs])
+    print("95% confidence intervals (bootstrap, 1000 resamples):")
+    for name, (low, high) in cis.items():
+        print(f"  {name}: [{low:.4f}, {high:.4f}]")
+
     # Plot confusion matrix
     cm = plot_confusion_matrix(all_labels, all_preds, class_names)
 
-    return epoch_loss, epoch_acc.item(), recall, all_preds, all_labels, cm
+    return epoch_loss, epoch_acc.item(), recall, all_preds, all_labels, cm, cis
 
 
 def main():
     print("Preparing data...")
-    train_loader, val_loader, class_names, num_classes = prepare_data()
+    train_loader, val_loader, test_loader, class_names, num_classes = prepare_data()
 
     print("Initializing model...")
     model = get_model(num_classes)
@@ -511,7 +615,7 @@ def main():
 
     # Learning rate scheduler
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=2, verbose=True
+        optimizer, mode='min', factor=0.5, patience=2
     )
 
     print("Starting training...")
@@ -522,25 +626,36 @@ def main():
     # Plot training history
     plot_training_history(history)
 
-    print("Evaluating final model on validation set...")
-    val_loss, val_acc, val_recall, all_preds, all_labels, cm = evaluate_model(model, val_loader, criterion, class_names)
-    print(f"Final Validation Accuracy: {val_acc:.4f}")
-    print(f"Final Validation Recall: {val_recall:.4f}")
+    # Use the epoch with the lowest validation loss (not simply the last epoch)
+    best_checkpoint = torch.load('best_loss_model.pth', map_location=DEVICE, weights_only=True)
+    model.load_state_dict(best_checkpoint['model_state_dict'])
+    print(f"Loaded lowest validation loss model from epoch {best_checkpoint['epoch'] + 1} "
+          f"(val loss {best_checkpoint['loss']:.4f})")
+
+    # Evaluate exactly once on the held-out test set
+    print("Evaluating best model on held-out test set...")
+    test_loss, test_acc, test_recall, all_preds, all_labels, cm, test_cis = evaluate_model(
+        model, test_loader, criterion, class_names
+    )
+    print(f"Test Accuracy: {test_acc:.4f}")
+    print(f"Test Recall: {test_recall:.4f}")
 
     # Save the final model
     torch.save({
         'model_state_dict': model.state_dict(),
         'class_names': class_names,
-        'val_accuracy': val_acc,
-        'val_recall': val_recall,
+        'test_accuracy': test_acc,
+        'test_recall': float(test_recall),
+        'test_cis': test_cis,
         'confusion_matrix': cm.tolist(),
     }, 'final_brain_mri_model.pth')
 
     print("Training complete!")
     print("Models have been saved as:")
+    print("- 'best_loss_model.pth' (lowest validation loss)")
     print("- 'best_acc_model.pth' (best accuracy)")
     print("- 'best_recall_model.pth' (best recall)")
-    print("- 'final_brain_mri_model.pth' (final model)")
+    print("- 'final_brain_mri_model.pth' (best validation model + test metrics, used by app.py)")
 
     # Example of how to use the model for prediction (uncomment when needed)
     # example_image = "path/to/example/image.jpg"
