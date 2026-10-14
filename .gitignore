@@ -15,3 +15,6 @@ test_split.csv
 __pycache__/
 .pytest_cache/
 .gradio/
+
+# Personal notes (portfolio text), kept out of the public repo
+docs/
