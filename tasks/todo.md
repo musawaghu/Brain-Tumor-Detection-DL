@@ -8,7 +8,7 @@
 - [x] main.py: remove `verbose=True` from ReduceLROnPlateau (crashes on current PyTorch)
 - [x] gradcam.py: hand-written Grad-CAM on layer4 + overlay
 - [x] app.py: Gradio demo (prediction, confidence, heatmap, examples, disclaimer)
-- [x] requirements.txt, .gitignore, space_README.md
+- [x] requirements.txt, .gitignore (space_README.md later removed: no hosted demo)
 - [x] tests/test_project.py (split, Grad-CAM, app predict)
 - [x] README.md rewrite
 - [x] main.py: select final model by lowest validation loss
@@ -19,9 +19,9 @@
 - [x] `python main.py`: train, note the test metrics + CIs printed at the end
 - [x] Copy 3 glioma + 3 normal images listed in `test_split.csv` into `samples/`
 - [x] Fill the results table in README.md, check `pytest` passes (app test runs now)
-- [ ] `python app.py`: try it locally, save a screenshot as `demo_screenshot.png`
-- [ ] Create the Hugging Face Space and upload (commands in README)
-- [ ] Put the Space URL in README.md
+- [x] Screenshots `demo_screenshot.png`, `demo_screenshot_normal.png`
+- [x] Decided against hosting (portfolio shows screenshots); weights published as GitHub release v1.0
+- [x] README: "Try the demo" with weights download, screenshots
 
 ## Review
 - 2026-10-14 smoke test (synthetic images, 1 epoch, throwaway copy): split → train → best-val checkpoint → test

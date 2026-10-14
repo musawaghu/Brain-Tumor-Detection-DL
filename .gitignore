@@ -1,7 +1,7 @@
 # Dataset (download PMRAM yourself, see README)
 data/
 
-# Model weights (~95 MB); hosted on the Hugging Face Space instead
+# Model weights (~95 MB); attached to the GitHub v1.0 release instead
 *.pth
 
 # Generated split files

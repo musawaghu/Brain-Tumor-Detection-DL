@@ -3,11 +3,10 @@ This project is a deep learning-based binary image classification model that det
 
 > **Research demo, not a medical device.** This model is a learning project and must not be used for diagnosis.
 
-**Live demo:** _coming soon (Hugging Face Space link)_. Upload an MRI or click a sample scan to get a prediction, a confidence score and a Grad-CAM heatmap.
+**Demo app:** upload an MRI or click a sample scan to get a prediction, a confidence score and a Grad-CAM heatmap. It runs locally in a few minutes, see [Try the demo](#try-the-demo).
 
-<!-- After running app.py, save a screenshot as demo_screenshot.png and uncomment:
-![Demo](demo_screenshot.png)
--->
+![Demo: glioma sample](demo_screenshot.png)
+![Demo: normal sample](demo_screenshot_normal.png)
 
 ## How it works
 - **Model:** ResNet50 pretrained on ImageNet. Only `layer4` and a new `Dropout + Linear` head are trained (transfer learning).
@@ -55,16 +54,28 @@ What the heatmaps show, honestly: on most glioma scans the model focuses on or n
 2. Copy the **raw** (non-augmented) glioma and normal images into `./data/` (subfolders are fine; images are found by filename).
    Don't use the dataset's pre-augmented images. Augmented copies of the same scan would end up in both train and test and inflate the score.
 
-## Setup and usage
+## Try the demo
+No dataset or training needed: the trained model is attached to the [v1.0 release](https://github.com/musawaghu/Brain-Tumor-Detection-DL/releases/tag/v1.0).
 ```bash
+git clone https://github.com/musawaghu/Brain-Tumor-Detection-DL.git
+cd Brain-Tumor-Detection-DL
 python -m venv .venv
 .venv\Scripts\activate          # Windows  (Linux/macOS: source .venv/bin/activate)
-pip install -r requirements.txt  # for a GPU build of PyTorch, see pytorch.org/get-started
+pip install -r requirements.txt
 
+# Download the trained model (94 MB) into the project folder
+curl -L -o final_brain_mri_model.pth https://github.com/musawaghu/Brain-Tumor-Detection-DL/releases/download/v1.0/final_brain_mri_model.pth
+
+python app.py    # open http://127.0.0.1:7860 and click a sample scan
+```
+
+## Training it yourself
+Download the dataset first (see [Dataset](#dataset)), then:
+```bash
 python main.py   # trains, prints test metrics + 95% CIs, saves final_brain_mri_model.pth and plots
-python app.py    # starts the Gradio demo at http://127.0.0.1:7860
 pytest           # runs the tests (the app test runs once final_brain_mri_model.pth exists)
 ```
+Training takes about 5 minutes on a mid-range GPU (RTX 2060 Super). For a GPU build of PyTorch, see pytorch.org/get-started.
 
 ### Sample scans for the demo
 The demo's sample images must come from the **test** split, so visitors only see scans the model never trained on. After training:
@@ -72,16 +83,6 @@ The demo's sample images must come from the **test** split, so visitors only see
 python -c "import pandas as pd, shutil, glob; t = pd.read_csv('test_split.csv'); [shutil.copy(glob.glob(f'data/**/{f}', recursive=True)[0], 'samples/') for f in pd.concat([t[t.label == 1].head(3), t[t.label == 0].head(3)]).filename]"
 ```
 (Create the `samples/` folder first.)
-
-### Deploying to Hugging Face Spaces
-1. Create a new **Gradio** Space at huggingface.co/new-space.
-2. Log in and upload (the weights file is uploaded with LFS automatically):
-```bash
-pip install -U huggingface_hub
-hf auth login
-hf upload <hf-username>/<space-name> space_README.md README.md --repo-type=space
-hf upload <hf-username>/<space-name> . . --repo-type=space --include "app.py" "gradcam.py" "requirements.txt" "final_brain_mri_model.pth" "samples/*"
-```
 
 ## Limitations
 - **Single dataset, single source.** Performance on scans from other hospitals or scanners is unknown.
@@ -99,5 +100,4 @@ tests/test_project.py     pytest tests
 gradcam_examples.png      Grad-CAM examples from the test set
 samples/                  demo sample scans (from the test split)
 brain_tumor_labels.csv    filename -> label (1 = glioma, 0 = normal)
-space_README.md           README (with config header) for the Hugging Face Space
 ```
