@@ -31,7 +31,8 @@ set_seed()
 
 # Define constants
 BATCH_SIZE = 32
-NUM_EPOCHS = 15
+NUM_EPOCHS = 15  # maximum; early stopping usually ends training sooner
+EARLY_STOPPING_PATIENCE = 5  # stop after this many epochs without a lower validation loss
 LEARNING_RATE = 0.001
 IMAGE_SIZE = 224
 # Relative paths so the project runs on any machine (put the PMRAM images in ./data/)
@@ -252,6 +253,7 @@ def get_model(num_classes):
 def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler, num_epochs):
     best_val_acc = 0.0
     best_val_loss = float('inf')  # Used to pick the final model
+    epochs_without_improvement = 0  # For early stopping
     best_val_recall = 0.0  # Added to track best recall
     history = {
         'train_loss': [], 'train_acc': [],
@@ -354,6 +356,9 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
                 'recall': float(epoch_recall),
             }, 'best_loss_model.pth')
             print(f"Saved new best loss model: {best_val_loss:.4f}")
+            epochs_without_improvement = 0
+        else:
+            epochs_without_improvement += 1
 
         # Save best model based on accuracy
         if epoch_acc > best_val_acc:
@@ -381,6 +386,11 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, scheduler
 
         # Update learning rate
         scheduler.step(epoch_loss)
+
+        # Early stopping: validation loss hasn't improved for EARLY_STOPPING_PATIENCE epochs
+        if epochs_without_improvement >= EARLY_STOPPING_PATIENCE:
+            print(f"Early stopping: no improvement in validation loss for {EARLY_STOPPING_PATIENCE} epochs")
+            break
 
     return model, history
 
@@ -414,7 +424,8 @@ def plot_training_history(history):
 
     plt.tight_layout()
     plt.savefig('training_history.png')
-    plt.show()
+    plt.close()  # saved to file; no window, so training doesn't pause
+    print("Saved plot: training_history.png")
 
 
 # Function to plot confusion matrix
@@ -436,7 +447,8 @@ def plot_confusion_matrix(y_true, y_pred, class_names):
     plt.ylabel('True Labels')
     plt.title('Confusion Matrix')
     plt.savefig('confusion_matrix.png')
-    plt.show()
+    plt.close()  # saved to file; no window, so the script doesn't pause
+    print("Saved plot: confusion_matrix.png")
 
     # Calculate per-class metrics
     print("\nPer-class metrics:")

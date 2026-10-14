@@ -37,4 +37,7 @@
 - Grad-CAM on real test scans: mostly on/near tumors; some off-target; corner artifacts on 2 normals.
 - Disclosed in README: same-patient adjacent slices can still cross splits; T1 (glioma) vs T2/FLAIR
   (normal) sequence imbalance is a possible shortcut.
-- Open notes: the PDF mentions early stopping but the code has none; `plt.show()` blocks until windows are closed.
+- Fixed: early stopping added (patience 5); training plots saved without opening windows. Retrain stopped at
+  epoch 7, kept the same epoch-2 model; weights identical to release v1.0 and identical test results.
+- PDF report rewritten (7 pages): new results, duplicate analysis, Grad-CAM, limitations, references;
+  corrected augmentation/loss descriptions to match the code.
